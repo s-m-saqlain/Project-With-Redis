@@ -1,0 +1,1243 @@
+config
+
+db.js
+
+const mongoose = require('mongoose');
+require('dotenv').config();
+const models = [
+  require('../models/Admin'),
+  require('../models/Buyer'),
+  require('../models/Seller'),
+  require('../models/TokenWhitelist'),
+];
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      dbName: 'Ecommerce',
+    });
+    console.log('MongoDB connected');
+    await Promise.all(models.map(Model => Model.init()));
+    console.log('Collections initialized');
+  } catch (error) {
+    console.error('Mongo connection failed:', error.message);
+    process.exit(1);
+  }
+};
+
+module.exports = connectDB;
+
+keys.js
+
+module.exports = {
+  ADMIN_SECRET: process.env.ADMIN_SECRET,
+  SELLER_SECRET: process.env.SELLER_SECRET,
+  BUYER_SECRET: process.env.BUYER_SECRET,
+};
+
+controllers
+
+admin 
+
+changePassword.js
+
+const bcrypt = require('bcryptjs');
+const Admin = require('../../models/Admin');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+
+const changePassword = async (req, res, next) => {
+  const { oldPassword, newPassword } = req.body;
+  try {
+    if (req.tokenEntry.role !== 'admin' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Admin.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Incorrect old password' });
+    }
+
+    if (!newPassword) {
+      return res.status(400).json({ message: 'New password is required' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
+    await user.save();
+
+    await TokenWhitelist.deleteMany({ userId: user._id, role: 'admin' });
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = changePassword;
+
+login.js
+
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const Admin = require('../../models/Admin');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+const keys = require('../../config/keys');
+
+const loginAdmin = async (req, res, next) => {
+  const { email, password } = req.body;
+  try {
+    const user = await Admin.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    const payload = { id: user._id, role: 'admin' };
+    const token = jwt.sign(payload, keys.ADMIN_SECRET, { expiresIn: '1h' });
+
+    await TokenWhitelist.create({ token, role: 'admin', userId: user._id });
+
+    res.json({ token });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = loginAdmin;
+
+profile.js
+
+const Admin = require('../../models/Admin');
+
+const getProfile = async (req, res, next) => {
+  try {
+    if (req.tokenEntry.role !== 'admin' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Admin.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      user: { id: user._id, name: user.name, email: user.email, role: 'admin' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateProfile = async (req, res, next) => {
+  const { name } = req.body;
+  try {
+    if (req.tokenEntry.role !== 'admin' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Admin.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+
+    user.name = name;
+    await user.save();
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: { id: user._id, name: user.name, email: user.email, role: 'admin' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getProfile, updateProfile };
+
+register.js
+
+const bcrypt = require('bcryptjs');
+const Admin = require('../../models/Admin');
+
+const registerAdmin = async (req, res, next) => {
+  const { name, email, password } = req.body;
+  try {
+    let admin = await Admin.findOne({ email });
+    if (admin) {
+      return res.status(400).json({ message: 'Admin already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    admin = new Admin({ name, email, password: hashedPassword });
+    await admin.save();
+
+    res.status(201).json({
+      message: 'Admin registered successfully',
+      user: { id: admin._id, name, email, role: 'admin' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = registerAdmin;
+
+buyer
+
+changePassword.js
+
+const bcrypt = require('bcryptjs');
+const Buyer = require('../../models/Buyer');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+
+const changePassword = async (req, res, next) => {
+  const { oldPassword, newPassword } = req.body;
+  try {
+    if (req.tokenEntry.role !== 'buyer' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Buyer.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Incorrect old password' });
+    }
+
+    if (!newPassword) {
+      return res.status(400).json({ message: 'New password is required' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
+    await user.save();
+
+    await TokenWhitelist.deleteMany({ userId: user._id, role: 'buyer' });
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = changePassword;
+
+login.js
+
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const Buyer = require('../../models/Buyer');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+const keys = require('../../config/keys');
+
+const loginBuyer = async (req, res, next) => {
+  const { email, password } = req.body;
+  try {
+    const user = await Buyer.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    const payload = { id: user._id, role: 'buyer' };
+    const token = jwt.sign(payload, keys.BUYER_SECRET, { expiresIn: '1h' });
+
+    await TokenWhitelist.create({ token, role: 'buyer', userId: user._id });
+
+    res.json({ token });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = loginBuyer;
+
+profile.js
+
+const Buyer = require('../../models/Buyer');
+
+const getProfile = async (req, res, next) => {
+  try {
+    if (req.tokenEntry.role !== 'buyer' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Buyer.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      user: { id: user._id, name: user.name, email: user.email, role: 'buyer' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateProfile = async (req, res, next) => {
+  const { name } = req.body;
+  try {
+    if (req.tokenEntry.role !== 'buyer' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Buyer.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+
+    user.name = name;
+    await user.save();
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: { id: user._id, name: user.name, email: user.email, role: 'buyer' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getProfile, updateProfile };
+
+register.js
+
+const bcrypt = require('bcryptjs');
+const Buyer = require('../../models/Buyer');
+
+const registerBuyer = async (req, res, next) => {
+  const { name, email, password } = req.body;
+  try {
+    let buyer = await Buyer.findOne({ email });
+    if (buyer) {
+      return res.status(400).json({ message: 'Buyer already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    buyer = new Buyer({ name, email, password: hashedPassword });
+    await buyer.save();
+
+    res.status(201).json({
+      message: 'Buyer registered successfully',
+      user: { id: buyer._id, name, email, role: 'buyer' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = registerBuyer;
+
+resetPassword
+
+reset.js
+
+const bcrypt = require('bcryptjs');
+const Buyer = require('../../models/Buyer');
+const Seller = require('../../models/Seller');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+
+const resetPassword = async (req, res, next) => {
+  const { userId, newPassword, confirmPassword } = req.body;
+  try {
+    if (!userId || !newPassword || !confirmPassword) {
+      return res.status(400).json({ message: 'userId, newPassword, and confirmPassword are required' });
+    }
+
+    let Model;
+    if (req.path.includes('buyer')) {
+      Model = Buyer;
+    } else if (req.path.includes('seller')) {
+      Model = Seller;
+    } else {
+      return res.status(400).json({ message: 'Invalid endpoint' });
+    }
+
+    const user = await Model.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.otp || !user.otp.isVerified) {
+      return res.status(400).json({ message: 'OTP not verified' });
+    }
+
+    const verifyTime = new Date(user.otp.verifyTime);
+    const now = new Date();
+    const fiveMinutes = 5 * 60 * 1000;
+    if (now - verifyTime > fiveMinutes) {
+      user.otp = undefined;
+      await user.save();
+      return res.status(400).json({ message: 'OTP verification has expired' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
+    user.otp = undefined;
+    await user.save();
+
+    await TokenWhitelist.deleteMany({ userId: user._id, role: req.path.includes('buyer') ? 'buyer' : 'seller' });
+
+    res.json({
+      status: true,
+      message: 'Password reset successfully',
+      data: { userId: user._id },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = resetPassword;
+
+sendOTP.js
+
+const { sendOTPEmail } = require('../../utils/email');
+const { generateOTP, hashOTP } = require('../../utils/otp');
+const Buyer = require('../../models/Buyer');
+const Seller = require('../../models/Seller');
+
+const sendOTP = async (req, res, next) => {
+  const { email } = req.body;
+  try {
+    let Model;
+    if (req.path.includes('buyer')) {
+      Model = Buyer;
+    } else if (req.path.includes('seller')) {
+      Model = Seller;
+    } else {
+      return res.status(400).json({ message: 'Invalid endpoint' });
+    }
+
+    const user = await Model.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const otp = generateOTP();
+    const otpHash = await hashOTP(otp);
+
+    user.otp = {
+      hash: otpHash,
+      createdAt: new Date(),
+      isVerified: false,
+      wrongAttempts: 0,
+    };
+    await user.save();
+
+    await sendOTPEmail(email, otp);
+
+    res.json({
+      status: true,
+      message: 'OTP sent to email',
+      data: { user_id: user._id },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = sendOTP;
+
+verifyOTP.js
+
+const bcrypt = require('bcryptjs');
+const Buyer = require('../../models/Buyer');
+const Seller = require('../../models/Seller');
+
+const verifyOTP = async (req, res, next) => {
+  const { userId, otp } = req.body;
+  try {
+    let Model;
+    if (req.path.includes('buyer')) {
+      Model = Buyer;
+    } else if (req.path.includes('seller')) {
+      Model = Seller;
+    } else {
+      return res.status(400).json({ message: 'Invalid endpoint' });
+    }
+
+    const user = await Model.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.otp || !user.otp.hash) {
+      return res.status(400).json({ message: 'No OTP found for this user' });
+    }
+
+    if (user.otp.isVerified) {
+      return res.status(200).json({ message: 'OTP already verified' });
+    }
+
+    const otpCreatedAt = new Date(user.otp.createdAt);
+    const now = new Date();
+    const fiveMinutes = 5 * 60 * 1000;
+    if (now - otpCreatedAt > fiveMinutes) {
+      user.otp = undefined;
+      await user.save();
+      return res.status(400).json({ message: 'OTP has expired' });
+    }
+
+    const isMatch = await bcrypt.compare(otp, user.otp.hash);
+    if (!isMatch) {
+      user.otp.wrongAttempts += 1;
+      if (user.otp.wrongAttempts >= 3) {
+        user.otp = undefined;
+        await user.save();
+        return res.status(400).json({ message: 'Maximum OTP attempts exceeded' });
+      }
+      await user.save();
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
+    user.otp.isVerified = true;
+    user.otp.verifyTime = new Date();
+    await user.save();
+
+    res.json({ message: 'OTP verified successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = verifyOTP;
+
+seller
+
+changePassword.js
+
+const bcrypt = require('bcryptjs');
+const Seller = require('../../models/Seller');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+
+const changePassword = async (req, res, next) => {
+  const { oldPassword, newPassword } = req.body;
+  try {
+    if (req.tokenEntry.role !== 'seller' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Seller.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Incorrect old password' });
+    }
+
+    if (!newPassword) {
+      return res.status(400).json({ message: 'New password is required' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
+    await user.save();
+
+    await TokenWhitelist.deleteMany({ userId: user._id, role: 'seller' });
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = changePassword;
+
+login.js
+
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const Seller = require('../../models/Seller');
+const TokenWhitelist = require('../../models/TokenWhitelist');
+const keys = require('../../config/keys');
+
+const loginSeller = async (req, res, next) => {
+  const { email, password } = req.body;
+  try {
+    const user = await Seller.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    const payload = { id: user._id, role: 'seller' };
+    const token = jwt.sign(payload, keys.SELLER_SECRET, { expiresIn: '1h' });
+
+    await TokenWhitelist.create({ token, role: 'seller', userId: user._id });
+
+    res.json({ token });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = loginSeller;
+
+profile.js
+
+const Seller = require('../../models/Seller');
+
+const getProfile = async (req, res, next) => {
+  try {
+    if (req.tokenEntry.role !== 'seller' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Seller.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      user: { id: user._id, name: user.name, email: user.email, role: 'seller' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateProfile = async (req, res, next) => {
+  const { name } = req.body;
+  try {
+    if (req.tokenEntry.role !== 'seller' || req.user.id.toString() !== req.tokenEntry.userId.toString()) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+
+    const user = await Seller.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+
+    user.name = name;
+    await user.save();
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: { id: user._id, name: user.name, email: user.email, role: 'seller' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getProfile, updateProfile };
+
+register.js
+
+const bcrypt = require('bcryptjs');
+const Seller = require('../../models/Seller');
+
+const registerSeller = async (req, res, next) => {
+  const { name, email, password } = req.body;
+  try {
+    let seller = await Seller.findOne({ email });
+    if (seller) {
+      return res.status(400).json({ message: 'Seller already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    seller = new Seller({ name, email, password: hashedPassword });
+    await seller.save();
+
+    res.status(201).json({
+      message: 'Seller registered successfully',
+      user: { id: seller._id, name, email, role: 'seller' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = registerSeller;
+
+middlewares
+
+auth.js
+
+const jwt = require('jsonwebtoken');
+const keys = require('../config/keys');
+
+const authenticate = (userType) => {
+  return async (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ message: 'No token provided' });
+    }
+
+    try {
+      const secret = {
+        admin: keys.ADMIN_SECRET,
+        buyer: keys.BUYER_SECRET,
+        seller: keys.SELLER_SECRET,
+      }[userType];
+
+      const decoded = jwt.verify(token, secret);
+      req.user = decoded;
+      next();
+    } catch (err) {
+      res.status(403).json({ message: 'Invalid or expired token' });
+    }
+  };
+};
+
+module.exports = authenticate;
+
+errorHandler.js
+
+const errorHandler = (err, req, res, next) => {
+  console.error('Error:', err.message);
+  res.status(err.status || 500).json({
+    status: false,
+    message: err.message || 'Internal Server Error',
+  });
+};
+
+module.exports = errorHandler;
+
+tokenValidation.js
+
+const TokenWhitelist = require('../models/TokenWhitelist');
+
+const validateToken = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ message: 'No token provided' });
+  }
+
+  try {
+    const tokenEntry = await TokenWhitelist.findOne({ token });
+    if (!tokenEntry) {
+      return res.status(403).json({ message: 'Invalid or expired token' });
+    }
+    req.tokenEntry = tokenEntry;
+    next();
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = validateToken;
+
+validation.js
+
+const { body, validationResult } = require('express-validator');
+
+const signupValidation = [
+  body('name').notEmpty().withMessage('Name is required'),
+  body('email').isEmail().withMessage('Invalid email').normalizeEmail(),
+  body('password')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/[a-z]/).withMessage('Must contain lowercase letter')
+    .matches(/[A-Z]/).withMessage('Must contain uppercase letter')
+    .matches(/[0-9]/).withMessage('Must contain a number')
+    .matches(/[^a-zA-Z0-9]/).withMessage('Must contain a special character'),
+];
+
+const loginValidation = [
+  body('email').isEmail().withMessage('Invalid email').normalizeEmail(),
+  body('password').notEmpty().withMessage('Password is required'),
+];
+
+const updateProfileValidation = [
+  body('name').notEmpty().withMessage('Name is required'),
+];
+
+const changePasswordValidation = [
+  body('oldPassword').notEmpty().withMessage('Old password is required'),
+  body('newPassword')
+    .isLength({ min: 8 }).withMessage('New password must be at least 8 characters')
+    .matches(/[a-z]/).withMessage('Must contain lowercase letter')
+    .matches(/[A-Z]/).withMessage('Must contain uppercase letter')
+    .matches(/[0-9]/).withMessage('Must contain a number')
+    .matches(/[^a-zA-Z0-9]/).withMessage('Must contain a special character'),
+];
+
+const sendOTPValidation = [
+  body('email').isEmail().withMessage('Invalid email').normalizeEmail(),
+];
+
+const verifyOTPValidation = [
+  body('userId').isMongoId().withMessage('Invalid user ID'),
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+];
+
+const resetPasswordValidation = [
+  body('userId').isMongoId().withMessage('Invalid user ID'),
+  body('newPassword')
+    .isLength({ min: 8 }).withMessage('New password must be at least 8 characters')
+    .matches(/[a-z]/).withMessage('Must contain lowercase letter')
+    .matches(/[A-Z]/).withMessage('Must contain uppercase letter')
+    .matches(/[0-9]/).withMessage('Must contain a number')
+    .matches(/[^a-zA-Z0-9]/).withMessage('Must contain a special character'),
+  body('confirmPassword').custom((value, { req }) => {
+    if (value !== req.body.newPassword) {
+      throw new Error('Passwords do not match');
+    }
+    return true;
+  }),
+];
+
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+  next();
+};
+
+module.exports = {
+  signupValidation,
+  loginValidation,
+  updateProfileValidation,
+  changePasswordValidation,
+  sendOTPValidation,
+  verifyOTPValidation,
+  resetPasswordValidation,
+  validate,
+};
+
+models
+
+Admin.js
+
+const mongoose = require('mongoose');
+
+const adminSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: [true, 'Name is required'],
+    trim: true,
+  },
+  email: {
+    type: String,
+    required: [true, 'Email is required'],
+    unique: true,
+    lowercase: true,
+    trim: true,
+    match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address'],
+  },
+  password: {
+    type: String,
+    required: [true, 'Password is required'],
+    minlength: [8, 'Password must be at least 8 characters'],
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+module.exports = mongoose.model('Admin', adminSchema);
+
+Buyer.js
+
+const mongoose = require('mongoose');
+
+const buyerSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: [true, 'Name is required'],
+    trim: true,
+  },
+  email: {
+    type: String,
+    required: [true, 'Email is required'],
+    unique: true,
+    lowercase: true,
+    trim: true,
+    match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address'],
+  },
+  password: {
+    type: String,
+    required: [true, 'Password is required'],
+    minlength: [8, 'Password must be at least 8 characters'],
+  },
+  wishlist: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+  }],
+  cart: [{
+    product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product',
+    },
+    quantity: {
+      type: Number,
+      default: 1,
+      min: [1, 'Quantity must be at least 1'],
+    },
+  }],
+  otp: {
+    hash: {
+      type: String,
+    },
+    createdAt: {
+      type: Date,
+    },
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    verifyTime: {
+      type: Date,
+    },
+    wrongAttempts: {
+      type: Number,
+      default: 0,
+      max: [3, 'Maximum OTP attempts exceeded'],
+    },
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+module.exports = mongoose.model('Buyer', buyerSchema);
+
+Seller.js
+
+const mongoose = require('mongoose');
+
+const sellerSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: [true, 'Name is required'],
+    trim: true,
+  },
+  email: {
+    type: String,
+    required: [true, 'Email is required'],
+    unique: true,
+    lowercase: true,
+    trim: true,
+    match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address'],
+  },
+  password: {
+    type: String,
+    required: [true, 'Password is required'],
+    minlength: [8, 'Password must be at least 8 characters'],
+  },
+  products: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+  }],
+  otp: {
+    hash: {
+      type: String,
+    },
+    createdAt: {
+      type: Date,
+    },
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    verifyTime: {
+      type: Date,
+    },
+    wrongAttempts: {
+      type: Number,
+      default: 0,
+      max: [3, 'Maximum OTP attempts exceeded'],
+    },
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+module.exports = mongoose.model('Seller', sellerSchema);
+
+TokenWhitelist.js
+
+const mongoose = require('mongoose');
+
+const tokenWhitelistSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: [true, 'User ID is required'],
+  },
+  role: {
+    type: String,
+    required: [true, 'Role is required'],
+    enum: {
+      values: ['buyer', 'seller', 'admin'],
+      message: 'Role must be buyer, seller, or admin',
+    },
+  },
+  token: {
+    type: String,
+    required: [true, 'Token is required'],
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+    expires: '7d', // Tokens expire after 7 days
+  },
+});
+
+module.exports = mongoose.model('TokenWhitelist', tokenWhitelistSchema);
+
+routes
+
+auth
+
+admin.js
+
+const express = require('express');
+const router = express.Router();
+const authenticate = require('../../middlewares/auth');
+const validateToken = require('../../middlewares/tokenValidation');
+const { signupValidation, loginValidation, updateProfileValidation, changePasswordValidation, validate } = require('../../middlewares/validation');
+const registerAdmin = require('../../controllers/admin/register');
+const loginAdmin = require('../../controllers/admin/login');
+const { getProfile, updateProfile } = require('../../controllers/admin/profile');
+const changePassword = require('../../controllers/admin/changePassword');
+
+router.post('/register', signupValidation, validate, registerAdmin);
+router.post('/login', loginValidation, validate, loginAdmin);
+router.get('/profile', validateToken, authenticate('admin'), getProfile);
+router.patch('/profile', validateToken, authenticate('admin'), updateProfileValidation, validate, updateProfile);
+router.post('/change-password', validateToken, authenticate('admin'), changePasswordValidation, validate, changePassword);
+
+module.exports = router;
+
+buyer.js
+
+const express = require('express');
+const router = express.Router();
+const authenticate = require('../../middlewares/auth');
+const validateToken = require('../../middlewares/tokenValidation');
+const { signupValidation, loginValidation, updateProfileValidation, changePasswordValidation, validate } = require('../../middlewares/validation');
+const registerBuyer = require('../../controllers/buyer/register');
+const loginBuyer = require('../../controllers/buyer/login');
+const { getProfile, updateProfile } = require('../../controllers/buyer/profile');
+const changePassword = require('../../controllers/buyer/changePassword');
+
+router.post('/register', signupValidation, validate, registerBuyer);
+router.post('/login', loginValidation, validate, loginBuyer);
+router.get('/profile', validateToken, authenticate('buyer'), getProfile);
+router.patch('/profile', validateToken, authenticate('buyer'), updateProfileValidation, validate, updateProfile);
+router.post('/change-password', validateToken, authenticate('buyer'), changePasswordValidation, validate, changePassword);
+
+module.exports = router;
+
+resetPassword.js
+
+const express = require('express');
+const router = express.Router();
+const { sendOTPValidation, verifyOTPValidation, resetPasswordValidation, validate } = require('../../middlewares/validation');
+const sendOTP = require('../../controllers/resetPassword/sendOTP');
+const verifyOTP = require('../../controllers/resetPassword/verifyOTP');
+const resetPassword = require('../../controllers/resetPassword/reset');
+
+router.post('/buyer/send-otp', sendOTPValidation, validate, sendOTP);
+router.post('/seller/send-otp', sendOTPValidation, validate, sendOTP);
+router.post('/buyer/verify-otp', verifyOTPValidation, validate, verifyOTP);
+router.post('/seller/verify-otp', verifyOTPValidation, validate, verifyOTP);
+router.post('/buyer/reset', resetPasswordValidation, validate, resetPassword);
+router.post('/seller/reset', resetPasswordValidation, validate, resetPassword);
+
+module.exports = router;
+
+seller.js
+
+const express = require('express');
+const router = express.Router();
+const authenticate = require('../../middlewares/auth');
+const validateToken = require('../../middlewares/tokenValidation');
+const { signupValidation, loginValidation, updateProfileValidation, changePasswordValidation, validate } = require('../../middlewares/validation');
+const registerSeller = require('../../controllers/seller/register');
+const loginSeller = require('../../controllers/seller/login');
+const { getProfile, updateProfile } = require('../../controllers/seller/profile');
+const changePassword = require('../../controllers/seller/changePassword');
+
+router.post('/register', signupValidation, validate, registerSeller);
+router.post('/login', loginValidation, validate, loginSeller);
+router.get('/profile', validateToken, authenticate('seller'), getProfile);
+router.patch('/profile', validateToken, authenticate('seller'), updateProfileValidation, validate, updateProfile);
+router.post('/change-password', validateToken, authenticate('seller'), changePasswordValidation, validate, changePassword);
+
+module.exports = router;
+
+ye bahar hai index.js auth ke folder se
+
+const express = require('express');
+const router = express.Router();
+
+router.use('/admin', require('./auth/admin'));
+router.use('/buyer', require('./auth/buyer'));
+router.use('/seller', require('./auth/seller'));
+router.use('/reset-password', require('./auth/resetPassword'));
+
+module.exports = router;
+
+scripts
+
+initDB.js
+
+const mongoose = require('mongoose');
+const connectDB = require('../config/db');
+const models = [
+  require('../models/Admin'),
+  require('../models/Buyer'),
+  require('../models/Seller'),
+  require('../models/TokenWhitelist'),
+];
+
+const initDB = async () => {
+  try {
+    await connectDB();
+    await Promise.all(models.map(Model => Model.createCollection()));
+    console.log('Collections initialized in Ecommerce database');
+    process.exit(0);
+  } catch (error) {
+    console.error('Database initialization failed:', error.message);
+    process.exit(1);
+  }
+};
+
+initDB();
+
+utils
+
+email.js
+
+const nodemailer = require('nodemailer');
+require('dotenv').config();
+
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
+  secure: true,
+  auth: {
+    user: process.env.EMAIL_HOST_USER,
+    pass: process.env.EMAIL_HOST_PASSWORD,
+  },
+});
+
+const sendOTPEmail = async (email, otp) => {
+  try {
+    await transporter.sendMail({
+      from: `"Ecommerce App" <${process.env.EMAIL_HOST_USER}>`,
+      to: email,
+      subject: 'Password Reset OTP',
+      text: `Your OTP for password reset is ${otp}. It expires in 5 minutes.`,
+      html: `<p>Your OTP for password reset is <b>${otp}</b>. It expires in 5 minutes.</p>`,
+    });
+    console.log(`✅ OTP ${otp} sent to ${email}`);
+  } catch (error) {
+    console.error(`❌ Failed to send OTP to ${email}:`, error.message);
+    throw new Error('Failed to send OTP');
+  }
+};
+
+module.exports = { sendOTPEmail };
+
+otp.js
+
+const bcrypt = require('bcryptjs');
+
+const generateOTP = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const hashOTP = async (otp) => {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(otp, salt);
+};
+
+module.exports = { generateOTP, hashOTP };
+
+.env
+
+PORT=5000
+MONGO_URI=mongodb://mongo_user:mongo_password@localhost:27017/
+ADMIN_SECRET=admin123
+SELLER_SECRET=seller123
+BUYER_SECRET=buyer123
+EMAIL_HOST_USER=khan.245lala@gmail.com
+EMAIL_HOST_PASSWORD=ysbphbtevpbclygy
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=465
+
+
+app.js
+
+const express = require('express');
+const connectDB = require('./config/db');
+const errorHandler = require('./middlewares/errorHandler');
+require('dotenv').config();
+
+const app = express();
+
+// Middleware
+app.use(express.json());
+
+// Routes
+app.use('/api/auth', require('./routes/index'));
+
+// Error Handler
+app.use(errorHandler);
+
+// Connect DB and start server
+connectDB();
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+
+isme eik kam krdo ke routes ke folder me Seller ka folder uske andar auth ka folder
