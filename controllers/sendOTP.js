@@ -44,13 +44,22 @@ const sendOTP = async (req, res, next) => {
       await redis.set(otpLimitKey, 1, 'EX', 3600); // set count = 1 with 1-hour expiry
     }
 
-    await sendOTPEmail(email, actual_otp);
+    // await sendOTPEmail(email, actual_otp);
 
     res.json({
       status: true,
       message: 'OTP sent to email',
       data: { 
         user_id: user._id 
+      }
+    });
+    // 📩 Send email in background (doesn't delay response)
+    setImmediate(async () => {
+      try {
+        await sendOTPEmail(email, actual_otp);
+        console.log(`OTP sent to ${email}`);
+      } catch (emailErr) {
+        console.error(`Failed to send OTP email: ${emailErr.message}`);
       }
     });
   } catch (err) {
