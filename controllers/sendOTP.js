@@ -1,7 +1,6 @@
 const { sendOTPEmail } = require('../utils/email');
 const { generateOTP, hashOTP } = require('../utils/otp');
 const User = require('../models/User');
-const Token = require('../models/Token'); // Added for debugging
 const redis = require('../config/redis');
 
 const sendOTP = async (req, res, next) => {
